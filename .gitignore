@@ -1,0 +1,7 @@
+bin/
+obj/
+webview2/
+webview2.nupkg
+*.user
+*.suo
+.vs/
