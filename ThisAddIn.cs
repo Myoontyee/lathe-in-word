@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 using Microsoft.Win32;
 using Extensibility;
@@ -19,7 +20,6 @@ namespace LatheAddIn
         private object _addInInstance;
         private Office.CustomTaskPane _taskPane;
 
-        // ── IDTExtensibility2 ─────────────────────────────────────────────
         public void OnConnection(object application, ext_ConnectMode connectMode,
                                  object addInInst, ref Array custom)
         {
@@ -35,7 +35,6 @@ namespace LatheAddIn
         public void OnStartupComplete(ref Array custom) { }
         public void OnBeginShutdown(ref Array custom) { }
 
-        // ── IRibbonExtensibility ──────────────────────────────────────────
         public string GetCustomUI(string ribbonID)
         {
             return @"<customUI xmlns='http://schemas.microsoft.com/office/2009/07/customui'>
@@ -63,7 +62,6 @@ namespace LatheAddIn
                 _taskPane.Visible = !_taskPane.Visible;
         }
 
-        // ── ICustomTaskPaneConsumer ───────────────────────────────────────
         public void CTPFactoryAvailable(Office.ICTPFactory CTPFactoryInst)
         {
             _taskPane = CTPFactoryInst.CreateCTP(
@@ -76,7 +74,6 @@ namespace LatheAddIn
             _taskPane.Visible = true;
         }
 
-        // ── Logo 绘制（32×32 SVG 风格矢量字母 L） ─────────────────────────
         private static Bitmap DrawLatheLogo(int w, int h)
         {
             Bitmap bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
@@ -84,20 +81,14 @@ namespace LatheAddIn
             {
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 g.Clear(Color.Transparent);
-
-                // 圆角背景
                 using (System.Drawing.Drawing2D.GraphicsPath path = RoundRect(1, 1, w - 2, h - 2, 6))
                 using (SolidBrush bg = new SolidBrush(Color.FromArgb(99, 102, 241)))
                     g.FillPath(bg, path);
-
-                // 白色 "L" 字
                 using (Font f = new Font("Segoe UI", w * 0.42f, FontStyle.Bold, GraphicsUnit.Pixel))
                 using (SolidBrush wb = new SolidBrush(Color.White))
                 {
                     SizeF sz = g.MeasureString("L", f);
-                    g.DrawString("L", f, wb,
-                        (w - sz.Width) / 2f - 1,
-                        (h - sz.Height) / 2f);
+                    g.DrawString("L", f, wb, (w - sz.Width) / 2f - 1, (h - sz.Height) / 2f);
                 }
             }
             return bmp;
@@ -114,7 +105,6 @@ namespace LatheAddIn
             return p;
         }
 
-        // ── COM 注册 / 注销 ───────────────────────────────────────────────
         [ComRegisterFunction]
         public static void Register(Type type)
         {
@@ -130,16 +120,13 @@ namespace LatheAddIn
         [ComUnregisterFunction]
         public static void Unregister(Type type)
         {
-            try
-            {
-                Registry.CurrentUser.DeleteSubKeyTree(
-                    @"Software\Microsoft\Office\Word\Addins\LatheAddIn.Connect");
-            }
+            try { Registry.CurrentUser.DeleteSubKeyTree(
+                @"Software\Microsoft\Office\Word\Addins\LatheAddIn.Connect"); }
             catch { }
         }
     }
 
-    // ── 侧边栏面板：WebView2 ──────────────────────────────────────────────
+    // ── 侧边栏面板 ────────────────────────────────────────────────────────
     [ComVisible(true)]
     [Guid("A1B2C3D4-E5F6-7890-ABCD-EF1234567890")]
     [ProgId("LatheAddIn.LathePanel")]
@@ -153,22 +140,19 @@ namespace LatheAddIn
             Dock = DockStyle.Fill;
         }
 
-        // 必须等 HWND 创建后再初始化 WebView2，否则一片黑
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-
             _webView = new WebView2();
             _webView.Dock = DockStyle.Fill;
             _webView.CoreWebView2InitializationCompleted += OnWebViewReady;
             Controls.Add(_webView);
 
-            string udp = System.IO.Path.Combine(
+            string udp = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LatheInWord", "WebView2");
-            System.IO.Directory.CreateDirectory(udp);
+            Directory.CreateDirectory(udp);
 
-            // 直接传路径字符串，避免 GetAwaiter().GetResult() 在 COM STA 线程死锁
             _webView.CreationProperties = new Microsoft.Web.WebView2.WinForms.CoreWebView2CreationProperties
             {
                 UserDataFolder = udp
@@ -176,232 +160,135 @@ namespace LatheAddIn
             _webView.EnsureCoreWebView2Async();
         }
 
-        private void OnWebViewReady(object sender, Microsoft.Web.WebView2.Core.CoreWebView2InitializationCompletedEventArgs e)
+        private void OnWebViewReady(object sender,
+            Microsoft.Web.WebView2.Core.CoreWebView2InitializationCompletedEventArgs e)
         {
             if (!e.IsSuccess) return;
-
-            // 禁用右键菜单和开发者工具（生产环境）
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
-
-            _webView.CoreWebView2.NavigateToString(GetSidebarHtml());
+            _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
+            _webView.CoreWebView2.NavigateToString(BuildHtml());
         }
 
-        private string GetSidebarHtml()
+        // 供刷新按钮调用（从 JS 通过 WebMessage 触发）
+        private void Reload()
         {
-            // 读取 Claude Code CLI 设置的环境变量，自动填入 Key
-            string apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") ?? "";
+            if (_webView != null && _webView.CoreWebView2 != null)
+                _webView.CoreWebView2.NavigateToString(BuildHtml());
+        }
 
-            return @"<!DOCTYPE html>
-<html lang='zh'>
-<head>
-<meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>Lathe</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    background: #18181b;
-    color: #e4e4e7;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
-  header {
-    padding: 14px 16px 12px;
-    border-bottom: 1px solid #27272a;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .logo {
-    width: 26px; height: 26px;
-    background: #6366f1;
-    border-radius: 6px;
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 700; font-size: 15px; color: #fff;
-    flex-shrink: 0;
-  }
-  header h1 { font-size: 16px; font-weight: 600; color: #fff; flex: 1; }
-  #key-bar {
-    padding: 8px 12px;
-    background: #1c1c1f;
-    border-bottom: 1px solid #27272a;
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  #key-bar input {
-    flex: 1;
-    background: #27272a;
-    border: 1px solid #3f3f46;
-    border-radius: 6px;
-    color: #a1a1aa;
-    font-size: 11px;
-    padding: 5px 8px;
-    outline: none;
-    font-family: monospace;
-  }
-  #key-bar button {
-    background: #3f3f46;
-    border: none; border-radius: 6px;
-    color: #d4d4d8; font-size: 11px;
-    padding: 5px 10px; cursor: pointer;
-  }
-  #key-bar button:hover { background: #52525b; }
-  #chat {
-    flex: 1;
-    overflow-y: auto;
-    padding: 14px 14px 0;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .msg { display: flex; gap: 8px; }
-  .msg.user { flex-direction: row-reverse; }
-  .bubble {
-    max-width: 84%;
-    padding: 9px 13px;
-    border-radius: 12px;
-    font-size: 13.5px;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .msg.user .bubble { background: #6366f1; color: #fff; border-bottom-right-radius: 3px; }
-  .msg.ai   .bubble { background: #27272a; color: #e4e4e7; border-bottom-left-radius: 3px; }
-  #input-area {
-    padding: 10px 10px 12px;
-    border-top: 1px solid #27272a;
-    display: flex;
-    gap: 7px;
-    align-items: flex-end;
-  }
-  textarea {
-    flex: 1;
-    background: #27272a;
-    border: 1px solid #3f3f46;
-    border-radius: 8px;
-    color: #e4e4e7;
-    font-size: 13.5px;
-    font-family: inherit;
-    padding: 8px 11px;
-    resize: none;
-    outline: none;
-    min-height: 38px;
-    max-height: 110px;
-    line-height: 1.5;
-  }
-  textarea:focus { border-color: #6366f1; }
-  #send {
-    background: #6366f1;
-    border: none; border-radius: 8px;
-    color: #fff; cursor: pointer;
-    padding: 0 13px; font-size: 16px;
-    flex-shrink: 0; height: 38px;
-  }
-  #send:hover { background: #4f46e5; }
-  #send:disabled { background: #3f3f46; cursor: default; }
-  .thinking { color: #52525b; font-size: 12px; padding: 2px 0; font-style: italic; }
-</style>
-</head>
-<body>
-<header>
-  <div class='logo'>L</div>
-  <h1>Lathe</h1>
-</header>
-<div id='key-bar'>
-  <input id='apikey' type='password' placeholder='Anthropic API Key (sk-ant-…)' value='" + apiKey + @"'>
-  <button onclick='saveKey()'>保存</button>
-</div>
-<div id='chat'>
-  <div class='msg ai'>
-    <div class='bubble'>你好！我是 Lathe。" + (apiKey.Length > 0 ? "已从环境变量自动读取 API Key，可以直接开始对话。" : "请先在上方填入 Anthropic API Key。") + @"</div>
-  </div>
-</div>
-<div id='input-area'>
-  <textarea id='inp' rows='1' placeholder='输入消息… (Enter 发送, Shift+Enter 换行)'></textarea>
-  <button id='send'>↑</button>
-</div>
-<script>
-var apiKey = document.getElementById('apikey').value;
+        private string BuildHtml()
+        {
+            string apiKey = "";
+            string baseUrl = "https://api.anthropic.com";
+            string model = "claude-sonnet-4-6";
 
-function saveKey() {
-  apiKey = document.getElementById('apikey').value.trim();
-  addMsg('ai', 'API Key 已更新。');
-}
+            try
+            {
+                string settingsPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".claude", "settings.json");
 
-var inp = document.getElementById('inp');
-var btn = document.getElementById('send');
-var chat = document.getElementById('chat');
+                if (File.Exists(settingsPath))
+                {
+                    string json = File.ReadAllText(settingsPath, Encoding.UTF8);
+                    apiKey  = JsonGet(json, "ANTHROPIC_AUTH_TOKEN")
+                           ?? JsonGet(json, "ANTHROPIC_API_KEY") ?? "";
+                    baseUrl = JsonGet(json, "ANTHROPIC_BASE_URL") ?? baseUrl;
+                    model   = JsonGet(json, "ANTHROPIC_DEFAULT_SONNET_MODEL")
+                           ?? JsonGet(json, "ANTHROPIC_MODEL") ?? model;
+                }
+            }
+            catch { }
 
-inp.addEventListener('input', function() {
-  inp.style.height = 'auto';
-  inp.style.height = Math.min(inp.scrollHeight, 110) + 'px';
-});
-inp.addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-});
-btn.addEventListener('click', send);
+            baseUrl = baseUrl.TrimEnd('/');
+            string statusMsg = apiKey.Length > 0
+                ? "已从 cc-switch 自动读取配置，直接开始对话。"
+                : "未找到配置，请检查 cc-switch 是否已启用。";
 
-function addMsg(role, text) {
-  var d = document.createElement('div');
-  d.className = 'msg ' + role;
-  var b = document.createElement('div');
-  b.className = 'bubble';
-  b.textContent = text;
-  d.appendChild(b);
-  chat.appendChild(d);
-  chat.scrollTop = chat.scrollHeight;
-  return b;
-}
+            StringBuilder sb = new StringBuilder();
+            sb.Append("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>");
+            sb.Append("<meta name='viewport' content='width=device-width,initial-scale=1'>");
+            sb.Append("<title>Lathe</title><style>");
+            sb.Append("*{box-sizing:border-box;margin:0;padding:0}");
+            sb.Append("body{font-family:'Segoe UI',system-ui,sans-serif;background:#18181b;color:#e4e4e7;height:100vh;display:flex;flex-direction:column}");
+            sb.Append("header{padding:10px 12px;border-bottom:1px solid #27272a;display:flex;align-items:center;gap:8px}");
+            sb.Append(".logo{width:22px;height:22px;background:#6366f1;border-radius:5px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;flex-shrink:0}");
+            sb.Append("h1{font-size:14px;font-weight:600;color:#fff;flex:1}");
+            sb.Append(".mdl{font-size:10px;color:#52525b;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
+            sb.Append("button.reload{background:#27272a;border:1px solid #3f3f46;border-radius:6px;color:#a1a1aa;font-size:12px;padding:3px 8px;cursor:pointer}");
+            sb.Append("button.reload:hover{background:#3f3f46;color:#fff}");
+            sb.Append("#chat{flex:1;overflow-y:auto;padding:10px 10px 0;display:flex;flex-direction:column;gap:8px}");
+            sb.Append(".msg{display:flex}.msg.user{flex-direction:row-reverse}");
+            sb.Append(".bubble{max-width:88%;padding:7px 11px;border-radius:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word}");
+            sb.Append(".msg.user .bubble{background:#6366f1;color:#fff;border-bottom-right-radius:3px}");
+            sb.Append(".msg.ai .bubble{background:#27272a;color:#e4e4e7;border-bottom-left-radius:3px}");
+            sb.Append("#inp-area{padding:8px 8px 10px;border-top:1px solid #27272a;display:flex;gap:6px;align-items:flex-end}");
+            sb.Append("textarea{flex:1;background:#27272a;border:1px solid #3f3f46;border-radius:8px;color:#e4e4e7;font-size:13px;font-family:inherit;padding:6px 10px;resize:none;outline:none;min-height:34px;max-height:96px;line-height:1.5}");
+            sb.Append("textarea:focus{border-color:#6366f1}");
+            sb.Append("#send{background:#6366f1;border:none;border-radius:8px;color:#fff;cursor:pointer;padding:0 11px;font-size:14px;flex-shrink:0;height:34px}");
+            sb.Append("#send:hover{background:#4f46e5}#send:disabled{background:#3f3f46;cursor:default}");
+            sb.Append(".thinking{color:#52525b;font-size:12px;padding:2px 0;font-style:italic}");
+            sb.Append("</style></head><body>");
+            sb.Append("<header><div class='logo'>L</div><h1>Lathe</h1>");
+            sb.Append("<span class='mdl'>" + model + "</span>");
+            sb.Append("<button class='reload' onclick='reload()' title='重新读取 cc-switch 配置'>↻</button>");
+            sb.Append("</header>");
+            sb.Append("<div id='chat'><div class='msg ai'><div class='bubble'>" + statusMsg + "</div></div></div>");
+            sb.Append("<div id='inp-area'><textarea id='inp' rows='1' placeholder='输入消息… (Enter发送 Shift+Enter换行)'></textarea>");
+            sb.Append("<button id='send'>↑</button></div>");
+            sb.Append("<script>");
+            sb.Append("var K='" + apiKey.Replace("'", "\\'") + "';");
+            sb.Append("var U='" + baseUrl + "';");
+            sb.Append("var M='" + model + "';");
+            sb.Append("var inp=document.getElementById('inp');");
+            sb.Append("var btn=document.getElementById('send');");
+            sb.Append("var chat=document.getElementById('chat');");
+            sb.Append("function reload(){window.chrome.webview.postMessage('reload');}");
+            sb.Append("inp.addEventListener('input',function(){inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,96)+'px';});");
+            sb.Append("inp.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});");
+            sb.Append("btn.addEventListener('click',send);");
+            sb.Append("function addMsg(r,t){var d=document.createElement('div');d.className='msg '+r;var b=document.createElement('div');b.className='bubble';b.textContent=t;d.appendChild(b);chat.appendChild(d);chat.scrollTop=chat.scrollHeight;return b;}");
+            sb.Append("function send(){");
+            sb.Append("  var t=inp.value.trim();if(!t)return;");
+            sb.Append("  if(!K){addMsg('ai','未找到 API Key，请检查 cc-switch 配置。');return;}");
+            sb.Append("  inp.value='';inp.style.height='auto';addMsg('user',t);btn.disabled=true;");
+            sb.Append("  var th=document.createElement('div');th.className='thinking';th.textContent='正在思考…';chat.appendChild(th);chat.scrollTop=chat.scrollHeight;");
+            sb.Append("  var x=new XMLHttpRequest();x.open('POST',U+'/v1/messages');");
+            sb.Append("  x.setRequestHeader('Content-Type','application/json');");
+            sb.Append("  x.setRequestHeader('x-api-key',K);");
+            sb.Append("  x.setRequestHeader('anthropic-version','2023-06-01');");
+            sb.Append("  x.onload=function(){th.remove();btn.disabled=false;");
+            sb.Append("    try{var d=JSON.parse(x.responseText);addMsg('ai',d.content&&d.content[0]?d.content[0].text:x.responseText);}");
+            sb.Append("    catch(ex){addMsg('ai','解析失败: '+x.responseText.slice(0,200));}");
+            sb.Append("  };");
+            sb.Append("  x.onerror=function(){th.remove();btn.disabled=false;addMsg('ai','网络错误。');};");
+            sb.Append("  x.send(JSON.stringify({model:M,max_tokens:1024,messages:[{role:'user',content:t}]}));");
+            sb.Append("}");
+            sb.Append("</script></body></html>");
+            return sb.ToString();
+        }
 
-function send() {
-  var text = inp.value.trim();
-  if (!text) return;
-  if (!apiKey) { addMsg('ai', '请先填入 API Key。'); return; }
-  inp.value = '';
-  inp.style.height = 'auto';
-  addMsg('user', text);
-  btn.disabled = true;
+        // WebMessage 接收：JS 发来 'reload' 时重新读取配置
+        private void OnWebMessageReceived(object sender,
+            Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            if (e.TryGetWebMessageAsString() == "reload")
+                _webView.CoreWebView2.NavigateToString(BuildHtml());
+        }
 
-  var thinking = document.createElement('div');
-  thinking.className = 'thinking';
-  thinking.textContent = '正在思考…';
-  chat.appendChild(thinking);
-  chat.scrollTop = chat.scrollHeight;
-
-  var xhr = new XMLHttpRequest();
-  xhr.open('POST', 'https://api.anthropic.com/v1/messages');
-  xhr.setRequestHeader('Content-Type', 'application/json');
-  xhr.setRequestHeader('x-api-key', apiKey);
-  xhr.setRequestHeader('anthropic-version', '2023-06-01');
-  xhr.onload = function() {
-    thinking.remove();
-    btn.disabled = false;
-    try {
-      var data = JSON.parse(xhr.responseText);
-      var reply = data.content && data.content[0] ? data.content[0].text : xhr.responseText;
-      addMsg('ai', reply);
-    } catch(ex) {
-      addMsg('ai', '解析失败: ' + xhr.responseText.slice(0, 200));
-    }
-  };
-  xhr.onerror = function() {
-    thinking.remove();
-    btn.disabled = false;
-    addMsg('ai', '网络错误，请检查连接。');
-  };
-  xhr.send(JSON.stringify({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 1024,
-    messages: [{ role: 'user', content: text }]
-  }));
-}
-</script>
-</body>
-</html>";
+        private static string JsonGet(string json, string key)
+        {
+            string search = "\"" + key + "\"";
+            int i = json.IndexOf(search);
+            if (i < 0) return null;
+            int c = json.IndexOf(':', i + search.Length);
+            if (c < 0) return null;
+            int q1 = json.IndexOf('"', c + 1);
+            if (q1 < 0) return null;
+            int q2 = json.IndexOf('"', q1 + 1);
+            if (q2 < 0) return null;
+            return json.Substring(q1 + 1, q2 - q1 - 1);
         }
 
         [ComRegisterFunction]
@@ -411,12 +298,12 @@ function send() {
         public static void Unregister(Type t) { }
     }
 
-    // ── Bitmap → IPictureDisp 转换工具 ────────────────────────────────────
+    // ── Bitmap → IPictureDisp ─────────────────────────────────────────────
     internal static class PictureConverter
     {
         [DllImport("oleaut32.dll")]
         private static extern int OleCreatePictureIndirect(
-            ref PICTDESC pPictDesc, ref Guid riid, bool fOwn, out stdole.IPictureDisp ppvObj);
+            ref PICTDESC pd, ref Guid riid, bool fOwn, out stdole.IPictureDisp ppv);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct PICTDESC
@@ -432,7 +319,7 @@ function send() {
         {
             PICTDESC pd = new PICTDESC();
             pd.cbSizeofstruct = Marshal.SizeOf(pd);
-            pd.picType = 1; // PICTYPE_BITMAP
+            pd.picType = 1;
             pd.hbitmap = bmp.GetHbitmap();
             Guid iid = new Guid("7BF80981-BF32-101A-8BBB-00AA00300CAB");
             stdole.IPictureDisp pic;
