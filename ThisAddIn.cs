@@ -151,26 +151,47 @@ namespace LatheAddIn
         {
             BackColor = Color.FromArgb(24, 24, 27);
             Dock = DockStyle.Fill;
-            InitWebView();
         }
 
-        private void InitWebView()
+        // 必须等 HWND 创建后再初始化 WebView2，否则一片黑
+        protected override void OnHandleCreated(EventArgs e)
         {
+            base.OnHandleCreated(e);
+
             _webView = new WebView2();
             _webView.Dock = DockStyle.Fill;
             _webView.CoreWebView2InitializationCompleted += OnWebViewReady;
             Controls.Add(_webView);
+
+            string udp = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LatheInWord", "WebView2");
+            System.IO.Directory.CreateDirectory(udp);
+
+            // 直接传路径字符串，避免 GetAwaiter().GetResult() 在 COM STA 线程死锁
+            _webView.CreationProperties = new Microsoft.Web.WebView2.WinForms.CoreWebView2CreationProperties
+            {
+                UserDataFolder = udp
+            };
             _webView.EnsureCoreWebView2Async();
         }
 
         private void OnWebViewReady(object sender, Microsoft.Web.WebView2.Core.CoreWebView2InitializationCompletedEventArgs e)
         {
-            if (e.IsSuccess)
-                _webView.CoreWebView2.NavigateToString(GetSidebarHtml());
+            if (!e.IsSuccess) return;
+
+            // 禁用右键菜单和开发者工具（生产环境）
+            _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+            _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+
+            _webView.CoreWebView2.NavigateToString(GetSidebarHtml());
         }
 
         private string GetSidebarHtml()
         {
+            // 读取 Claude Code CLI 设置的环境变量，自动填入 Key
+            string apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") ?? "";
+
             return @"<!DOCTYPE html>
 <html lang='zh'>
 <head>
@@ -188,46 +209,73 @@ namespace LatheAddIn
     flex-direction: column;
   }
   header {
-    padding: 18px 20px 14px;
+    padding: 14px 16px 12px;
     border-bottom: 1px solid #27272a;
     display: flex;
     align-items: center;
     gap: 10px;
   }
   .logo {
-    width: 28px; height: 28px;
+    width: 26px; height: 26px;
     background: #6366f1;
     border-radius: 6px;
     display: flex; align-items: center; justify-content: center;
-    font-weight: 700; font-size: 16px; color: #fff;
+    font-weight: 700; font-size: 15px; color: #fff;
     flex-shrink: 0;
   }
-  header h1 { font-size: 17px; font-weight: 600; color: #fff; }
+  header h1 { font-size: 16px; font-weight: 600; color: #fff; flex: 1; }
+  #key-bar {
+    padding: 8px 12px;
+    background: #1c1c1f;
+    border-bottom: 1px solid #27272a;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  #key-bar input {
+    flex: 1;
+    background: #27272a;
+    border: 1px solid #3f3f46;
+    border-radius: 6px;
+    color: #a1a1aa;
+    font-size: 11px;
+    padding: 5px 8px;
+    outline: none;
+    font-family: monospace;
+  }
+  #key-bar button {
+    background: #3f3f46;
+    border: none; border-radius: 6px;
+    color: #d4d4d8; font-size: 11px;
+    padding: 5px 10px; cursor: pointer;
+  }
+  #key-bar button:hover { background: #52525b; }
   #chat {
     flex: 1;
     overflow-y: auto;
-    padding: 16px 16px 0;
+    padding: 14px 14px 0;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
   }
   .msg { display: flex; gap: 8px; }
   .msg.user { flex-direction: row-reverse; }
   .bubble {
-    max-width: 82%;
-    padding: 10px 14px;
+    max-width: 84%;
+    padding: 9px 13px;
     border-radius: 12px;
-    font-size: 14px;
-    line-height: 1.55;
+    font-size: 13.5px;
+    line-height: 1.6;
     white-space: pre-wrap;
+    word-break: break-word;
   }
   .msg.user .bubble { background: #6366f1; color: #fff; border-bottom-right-radius: 3px; }
-  .msg.ai .bubble { background: #27272a; color: #e4e4e7; border-bottom-left-radius: 3px; }
+  .msg.ai   .bubble { background: #27272a; color: #e4e4e7; border-bottom-left-radius: 3px; }
   #input-area {
-    padding: 12px 12px 14px;
+    padding: 10px 10px 12px;
     border-top: 1px solid #27272a;
     display: flex;
-    gap: 8px;
+    gap: 7px;
     align-items: flex-end;
   }
   textarea {
@@ -236,30 +284,26 @@ namespace LatheAddIn
     border: 1px solid #3f3f46;
     border-radius: 8px;
     color: #e4e4e7;
-    font-size: 14px;
+    font-size: 13.5px;
     font-family: inherit;
-    padding: 9px 12px;
+    padding: 8px 11px;
     resize: none;
     outline: none;
-    min-height: 40px;
-    max-height: 120px;
+    min-height: 38px;
+    max-height: 110px;
     line-height: 1.5;
   }
   textarea:focus { border-color: #6366f1; }
-  button#send {
+  #send {
     background: #6366f1;
-    border: none;
-    border-radius: 8px;
-    color: #fff;
-    cursor: pointer;
-    padding: 9px 14px;
-    font-size: 18px;
-    line-height: 1;
-    flex-shrink: 0;
-    height: 40px;
+    border: none; border-radius: 8px;
+    color: #fff; cursor: pointer;
+    padding: 0 13px; font-size: 16px;
+    flex-shrink: 0; height: 38px;
   }
-  button#send:hover { background: #4f46e5; }
-  .thinking { color: #71717a; font-size: 13px; padding: 4px 0; }
+  #send:hover { background: #4f46e5; }
+  #send:disabled { background: #3f3f46; cursor: default; }
+  .thinking { color: #52525b; font-size: 12px; padding: 2px 0; font-style: italic; }
 </style>
 </head>
 <body>
@@ -267,37 +311,44 @@ namespace LatheAddIn
   <div class='logo'>L</div>
   <h1>Lathe</h1>
 </header>
+<div id='key-bar'>
+  <input id='apikey' type='password' placeholder='Anthropic API Key (sk-ant-…)' value='" + apiKey + @"'>
+  <button onclick='saveKey()'>保存</button>
+</div>
 <div id='chat'>
   <div class='msg ai'>
-    <div class='bubble'>你好！我是 Lathe，你的 Word AI 写作助手。\n\n请输入你的问题或粘贴文档内容，我来帮你润色、翻译、总结或续写。</div>
+    <div class='bubble'>你好！我是 Lathe。" + (apiKey.Length > 0 ? "已从环境变量自动读取 API Key，可以直接开始对话。" : "请先在上方填入 Anthropic API Key。") + @"</div>
   </div>
 </div>
 <div id='input-area'>
   <textarea id='inp' rows='1' placeholder='输入消息… (Enter 发送, Shift+Enter 换行)'></textarea>
-  <button id='send'>&#9650;</button>
+  <button id='send'>↑</button>
 </div>
 <script>
-const chat = document.getElementById('chat');
-const inp  = document.getElementById('inp');
-const btn  = document.getElementById('send');
+var apiKey = document.getElementById('apikey').value;
 
-// API Key 暂时硬编码占位，后续换成设置界面
-const API_KEY = 'YOUR_ANTHROPIC_API_KEY';
+function saveKey() {
+  apiKey = document.getElementById('apikey').value.trim();
+  addMsg('ai', 'API Key 已更新。');
+}
 
-inp.addEventListener('input', () => {
+var inp = document.getElementById('inp');
+var btn = document.getElementById('send');
+var chat = document.getElementById('chat');
+
+inp.addEventListener('input', function() {
   inp.style.height = 'auto';
-  inp.style.height = Math.min(inp.scrollHeight, 120) + 'px';
+  inp.style.height = Math.min(inp.scrollHeight, 110) + 'px';
 });
-
-inp.addEventListener('keydown', e => {
+inp.addEventListener('keydown', function(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 btn.addEventListener('click', send);
 
 function addMsg(role, text) {
-  const d = document.createElement('div');
+  var d = document.createElement('div');
   d.className = 'msg ' + role;
-  const b = document.createElement('div');
+  var b = document.createElement('div');
   b.className = 'bubble';
   b.textContent = text;
   d.appendChild(b);
@@ -306,41 +357,47 @@ function addMsg(role, text) {
   return b;
 }
 
-async function send() {
-  const text = inp.value.trim();
+function send() {
+  var text = inp.value.trim();
   if (!text) return;
+  if (!apiKey) { addMsg('ai', '请先填入 API Key。'); return; }
   inp.value = '';
   inp.style.height = 'auto';
   addMsg('user', text);
+  btn.disabled = true;
 
-  const thinking = document.createElement('div');
+  var thinking = document.createElement('div');
   thinking.className = 'thinking';
-  thinking.textContent = 'Lathe 正在思考…';
+  thinking.textContent = '正在思考…';
   chat.appendChild(thinking);
   chat.scrollTop = chat.scrollHeight;
 
-  try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: text }]
-      })
-    });
-    const data = await res.json();
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', 'https://api.anthropic.com/v1/messages');
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.setRequestHeader('x-api-key', apiKey);
+  xhr.setRequestHeader('anthropic-version', '2023-06-01');
+  xhr.onload = function() {
     thinking.remove();
-    const reply = data.content && data.content[0] ? data.content[0].text : JSON.stringify(data);
-    addMsg('ai', reply);
-  } catch(err) {
+    btn.disabled = false;
+    try {
+      var data = JSON.parse(xhr.responseText);
+      var reply = data.content && data.content[0] ? data.content[0].text : xhr.responseText;
+      addMsg('ai', reply);
+    } catch(ex) {
+      addMsg('ai', '解析失败: ' + xhr.responseText.slice(0, 200));
+    }
+  };
+  xhr.onerror = function() {
     thinking.remove();
-    addMsg('ai', '请求失败：' + err.message + '\n\n请在代码里填入你的 Anthropic API Key。');
-  }
+    btn.disabled = false;
+    addMsg('ai', '网络错误，请检查连接。');
+  };
+  xhr.send(JSON.stringify({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: text }]
+  }));
 }
 </script>
 </body>
