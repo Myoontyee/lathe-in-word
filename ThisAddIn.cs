@@ -44,7 +44,75 @@ namespace LatheAddIn
             catch { return ""; }
         }
 
-        // 在选中区域下方以 Track Changes 模式插入 AI 结果
+        public double GetFontSize()
+        {
+            try { return _app.Selection.Font.Size; }
+            catch { return 0; }
+        }
+
+        public void SetFontSize(double size)
+        {
+            try { _app.Selection.Font.Size = (float)size; }
+            catch { }
+        }
+
+        public void SetBold(bool bold)
+        {
+            try { _app.Selection.Font.Bold = bold ? 1 : 0; }
+            catch { }
+        }
+
+        public void SetItalic(bool italic)
+        {
+            try { _app.Selection.Font.Italic = italic ? 1 : 0; }
+            catch { }
+        }
+
+        public void SetUnderline(bool underline)
+        {
+            try { _app.Selection.Font.Underline = underline ? Word.WdUnderline.wdUnderlineSingle : Word.WdUnderline.wdUnderlineNone; }
+            catch { }
+        }
+
+        public int GetParagraphCount()
+        {
+            try { return _app.ActiveDocument.Paragraphs.Count; }
+            catch { return 0; }
+        }
+
+        public string GetParagraphText(int index)
+        {
+            try
+            {
+                string t = _app.ActiveDocument.Paragraphs[index].Range.Text ?? "";
+                return t.TrimEnd('\r');
+            }
+            catch { return ""; }
+        }
+
+        public void SelectParagraph(int index)
+        {
+            try { _app.ActiveDocument.Paragraphs[index].Range.Select(); }
+            catch { }
+        }
+
+        public string GetAllParagraphs()
+        {
+            try
+            {
+                var doc = _app.ActiveDocument;
+                var sb = new StringBuilder();
+                int count = doc.Paragraphs.Count;
+                for (int i = 1; i <= count; i++)
+                {
+                    string t = (doc.Paragraphs[i].Range.Text ?? "").TrimEnd('\r');
+                    sb.Append(i).Append(": ").AppendLine(t);
+                }
+                return sb.ToString();
+            }
+            catch { return ""; }
+        }
+
         public void InsertWithTrackChanges(string newText)
         {
             try
@@ -57,14 +125,24 @@ namespace LatheAddIn
             catch { }
         }
 
-        // 直接替换选中内容（不留修订记录）
         public void ReplaceSelection(string newText)
         {
             try { _app.Selection.TypeText(newText); }
             catch { }
         }
 
-        // 在段落末尾插入新段落
+        public void ReplaceParagraph(int index, string newText)
+        {
+            try
+            {
+                Word.Range r = _app.ActiveDocument.Paragraphs[index].Range;
+                // don't include the paragraph mark
+                r.End = r.End - 1;
+                r.Text = newText;
+            }
+            catch { }
+        }
+
         public void InsertNewParagraph(string text)
         {
             try
@@ -77,10 +155,22 @@ namespace LatheAddIn
             catch { }
         }
 
-        // 以批注形式添加
         public void InsertAsComment(string text)
         {
             try { _app.ActiveDocument.Comments.Add(_app.Selection.Range, text); }
+            catch { }
+        }
+
+        public void SetFontColor(string hexColor)
+        {
+            try
+            {
+                hexColor = hexColor.TrimStart('#');
+                int r = Convert.ToInt32(hexColor.Substring(0, 2), 16);
+                int g = Convert.ToInt32(hexColor.Substring(2, 2), 16);
+                int b = Convert.ToInt32(hexColor.Substring(4, 2), 16);
+                _app.Selection.Font.Color = (Word.WdColor)(r | (g << 8) | (b << 16));
+            }
             catch { }
         }
     }
@@ -238,11 +328,10 @@ namespace LatheAddIn
         {
             if (!e.IsSuccess) return;
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-            _webView.CoreWebView2.Settings.AreDevToolsEnabled = true; // 开发期保留
+            _webView.CoreWebView2.Settings.AreDevToolsEnabled = true;
             _webView.CoreWebView2.AddHostObjectToScript("word", _bridge);
             _webView.CoreWebView2.WebMessageReceived += OnWebMessage;
 
-            // 写 UI 文件并导航
             string uiPath = WriteUiFile();
             _webView.CoreWebView2.Navigate("file:///" + uiPath.Replace('\\', '/'));
         }
@@ -334,6 +423,7 @@ namespace LatheAddIn
   --bg:#18181b;--bg2:#1c1c1f;--bg3:#27272a;--border:#3f3f46;
   --text:#e4e4e7;--muted:#71717a;--accent:#6366f1;--accent2:#4f46e5;
   --user-bg:#6366f1;--ai-bg:#27272a;--green:#22c55e;--red:#ef4444;
+  --tool-bg:#1a2332;--tool-border:#2d4a7a;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
@@ -393,11 +483,17 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
   font-size:13.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
 .msg.user .bubble{background:var(--user-bg);color:#fff;border-bottom-right-radius:3px}
 .msg.ai .bubble{background:var(--ai-bg);color:var(--text);border-bottom-left-radius:3px}
-.msg-actions{display:flex;gap:4px;margin-top:2px}
+.msg-actions{display:flex;gap:4px;margin-top:2px;flex-wrap:wrap}
 .mab{background:transparent;border:1px solid var(--border);border-radius:4px;
   color:var(--muted);font-size:10px;padding:2px 6px;cursor:pointer}
 .mab:hover{color:var(--text);border-color:var(--accent)}
 .thinking{color:var(--muted);font-size:12px;font-style:italic;padding:4px 0}
+
+/* ─ tool call bubble ─ */
+.tool-call{background:var(--tool-bg);border:1px solid var(--tool-border);border-radius:8px;
+  padding:6px 10px;font-size:11px;color:#7dd3fc;max-width:92%;margin:2px 0}
+.tool-call .tool-name{font-weight:700;color:#38bdf8}
+.tool-call .tool-result{color:#86efac;margin-top:3px}
 
 /* ─ token bar ─ */
 #tok-bar{display:flex;gap:12px;align-items:center;padding:4px 10px;
@@ -495,9 +591,9 @@ textarea#inp:focus{border-color:var(--accent)}
 
 <!-- Token bar -->
 <div id='tok-bar'>
-  <span>本地处理 <b id='t-local'>0</b> tok</span>
-  <span>已发送 <b id='t-sent'>0</b> tok</span>
-  <span>已接收 <b id='t-recv'>0</b> tok</span>
+  <span>本地处理 <b id='t-local'>0</b> tokens</span>
+  <span>已发送云端 <b id='t-sent'>0</b> tokens</span>
+  <span>已接收 <b id='t-recv'>0</b> tokens</span>
   <span class='tok-cloud' id='doc-sent-indicator'></span>
 </div>
 
@@ -524,7 +620,7 @@ textarea#inp:focus{border-color:var(--accent)}
   </div>
   <div class='param-row'>
     <label>Max Tokens</label>
-    <input type='number' id='p-maxtok' min='100' max='8192' value='2048'>
+    <input type='number' id='p-maxtok' min='100' max='8192' value='4096'>
     <span class='param-val'></span>
   </div>
 </details>
@@ -555,12 +651,176 @@ var API_KEY  = '{{API_KEY}}';
 var BASE_URL = '{{BASE_URL}}';
 var MODEL    = '{{MODEL}}';
 
+// ─── Word Tool Definitions (Claude Tool Use API) ───────────────────────
+var WORD_TOOLS = [
+  {
+    name: 'get_selected_text',
+    description: 'Get the currently selected text in the Word document. Use this to read what the user has highlighted.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'get_document_text',
+    description: 'Get the full text content of the Word document.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'get_paragraph_count',
+    description: 'Get the total number of paragraphs in the document.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'get_paragraph_text',
+    description: 'Get the text of a specific paragraph by index (1-based).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        index: { type: 'integer', description: 'Paragraph index, starting from 1' }
+      },
+      required: ['index']
+    }
+  },
+  {
+    name: 'get_all_paragraphs',
+    description: 'Get all paragraphs with their index numbers. Use this to understand the document structure.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'select_paragraph',
+    description: 'Select a specific paragraph by index (1-based). Must call this before modifying font/format of that paragraph.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        index: { type: 'integer', description: 'Paragraph index, starting from 1' }
+      },
+      required: ['index']
+    }
+  },
+  {
+    name: 'get_font_size',
+    description: 'Get the font size of the current selection in points.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'set_font_size',
+    description: 'Set the font size of the current selection in points.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        size: { type: 'number', description: 'Font size in points (e.g. 12, 14, 24)' }
+      },
+      required: ['size']
+    }
+  },
+  {
+    name: 'set_bold',
+    description: 'Set bold formatting on the current selection.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        bold: { type: 'boolean', description: 'true to bold, false to remove bold' }
+      },
+      required: ['bold']
+    }
+  },
+  {
+    name: 'set_italic',
+    description: 'Set italic formatting on the current selection.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        italic: { type: 'boolean', description: 'true for italic, false to remove' }
+      },
+      required: ['italic']
+    }
+  },
+  {
+    name: 'set_underline',
+    description: 'Set underline formatting on the current selection.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        underline: { type: 'boolean', description: 'true for underline, false to remove' }
+      },
+      required: ['underline']
+    }
+  },
+  {
+    name: 'replace_selection',
+    description: 'Replace the current selection with new text.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The new text to insert' }
+      },
+      required: ['text']
+    }
+  },
+  {
+    name: 'replace_paragraph',
+    description: 'Replace the text of a specific paragraph by index (1-based).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        index: { type: 'integer', description: 'Paragraph index, starting from 1' },
+        text: { type: 'string', description: 'The new paragraph text' }
+      },
+      required: ['index', 'text']
+    }
+  },
+  {
+    name: 'insert_with_track_changes',
+    description: 'Insert text at the current selection position with Track Changes enabled, so the user can review and accept/reject.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Text to insert' }
+      },
+      required: ['text']
+    }
+  },
+  {
+    name: 'insert_new_paragraph',
+    description: 'Insert a new paragraph after the current selection.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Text for the new paragraph' }
+      },
+      required: ['text']
+    }
+  },
+  {
+    name: 'insert_as_comment',
+    description: 'Add a comment annotation to the current selection in the Word document.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Comment text' }
+      },
+      required: ['text']
+    }
+  },
+  {
+    name: 'set_font_color',
+    description: 'Set the font color of the current selection.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        color: { type: 'string', description: 'Hex color code, e.g. #FF0000 for red' }
+      },
+      required: ['color']
+    }
+  }
+];
+
+var SYSTEM_PROMPT = 'You are Lathe, an autonomous AI agent embedded in Microsoft Word. You have direct access to Word document manipulation tools.\n\nCRITICAL RULES:\n1. When asked to modify the document, USE YOUR TOOLS IMMEDIATELY. Do not ask the user for information you can retrieve yourself.\n2. If the user says ""first line"" or ""第一行"": call select_paragraph with index=1.\n3. If the user asks to change font size: first select_paragraph(index), then get_font_size(), then set_font_size(new_size).\n4. If the user asks to modify text content: use get_all_paragraphs() to find it, then replace_paragraph().\n5. NEVER ask ""what is the current font size?"" or ""which paragraph?"" - get the info yourself using tools.\n6. After completing the task, briefly report what you did (e.g. ""已将第一行字号从12pt扩大到24pt"").\n7. Chain multiple tool calls automatically to complete complex tasks.\n8. Always prefer using tools over asking the user for clarification.';
+
 // ─── State ────────────────────────────────────────────────────────────────
 var sessions   = [{ id: 1, name: 'Session 1', history: [] }];
 var curSess    = 0;
 var selText    = '';
 var lastAiMsg  = '';
-var cloudLog   = [];   // { role, content, time }
+var cloudLog   = [];
 var tokLocal   = 0;
 var tokSent    = 0;
 var tokRecv    = 0;
@@ -569,7 +829,7 @@ var tokRecv    = 0;
 window.addEventListener('DOMContentLoaded', function() {
   renderSessions();
   renderChat();
-  addMsg('ai', 'Lathe 已就绪。选中 Word 文字后点击【📖 读取选中】，AI 可直接对其操作。\n\ncc-switch 配置: ' + BASE_URL);
+  addMsg('ai', 'Lathe 已就绪 (Agent 模式)。\n\nAgent 可以直接操作 Word 文档——无需手动读取，直接下指令即可。\n\ncc-switch: ' + BASE_URL + '\n模型: ' + MODEL);
   document.getElementById('inp').addEventListener('input', autosize);
   document.getElementById('inp').addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
@@ -601,10 +861,8 @@ function deleteSess(idx) {
 
 function renderSessions() {
   var bar = document.getElementById('sess-bar');
-  // remove old tabs
   var tabs = bar.querySelectorAll('.s-tab');
   for (var i = 0; i < tabs.length; i++) bar.removeChild(tabs[i]);
-  // insert new tabs before the + button
   var newBtn = document.getElementById('new-sess');
   for (var i = 0; i < sessions.length; i++) {
     (function(idx) {
@@ -639,12 +897,6 @@ function addMsg(role, text) {
   sessions[curSess].history.push({ role: role, content: text });
   appendMsgEl(role, text);
   document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
-  // token tracking (approx: 1 token ≈ 3.5 chars for zh/en mix)
-  var toks = Math.ceil(text.length / 3.5);
-  if (role === 'user') { tokSent += toks; }
-  else if (role === 'ai') { tokRecv += toks; }
-  tokLocal += toks;
-  updateTokBar();
 }
 
 function appendMsgEl(role, text) {
@@ -659,19 +911,15 @@ function appendMsgEl(role, text) {
   if (role === 'ai') {
     var acts = document.createElement('div');
     acts.className = 'msg-actions';
-    // Track Changes insert
     var b1 = document.createElement('button');
-    b1.className = 'mab'; b1.textContent = '⬇ Track Changes 插入';
+    b1.className = 'mab'; b1.textContent = '⬇ Track Changes';
     (function(t){ b1.onclick = function() { insertToWord(t, true); }; })(text);
-    // Direct insert
     var b2 = document.createElement('button');
     b2.className = 'mab'; b2.textContent = '⬇ 直接插入';
     (function(t){ b2.onclick = function() { insertToWord(t, false); }; })(text);
-    // Comment
     var b3 = document.createElement('button');
     b3.className = 'mab'; b3.textContent = '💬 批注';
     (function(t){ b3.onclick = function() { insertComment(t); }; })(text);
-    // Copy
     var b4 = document.createElement('button');
     b4.className = 'mab'; b4.textContent = '📋 复制';
     (function(t){ b4.onclick = function() { navigator.clipboard.writeText(t); }; })(text);
@@ -685,13 +933,178 @@ function appendMsgEl(role, text) {
   chat.appendChild(div);
 }
 
+function showToolCall(name, input, result) {
+  var chat = document.getElementById('chat');
+  var div = document.createElement('div');
+  div.className = 'tool-call';
+  var nameEl = document.createElement('div');
+  nameEl.className = 'tool-name';
+  nameEl.textContent = '🔧 ' + name + '(' + JSON.stringify(input) + ')';
+  div.appendChild(nameEl);
+  if (result !== undefined) {
+    var resEl = document.createElement('div');
+    resEl.className = 'tool-result';
+    var rs = String(result);
+    resEl.textContent = '→ ' + (rs.length > 120 ? rs.slice(0, 120) + '…' : rs);
+    div.appendChild(resEl);
+  }
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
 function updateTokBar() {
   document.getElementById('t-local').textContent = tokLocal;
   document.getElementById('t-sent').textContent  = tokSent;
   document.getElementById('t-recv').textContent  = tokRecv;
 }
 
-// ─── Word bridge ──────────────────────────────────────────────────────────
+// ─── Tool Executor ────────────────────────────────────────────────────────
+async function executeTool(name, input) {
+  var w = window.chrome.webview.hostObjects.word;
+  try {
+    switch (name) {
+      case 'get_selected_text':      return await w.GetSelectedText();
+      case 'get_document_text':      return await w.GetDocumentText();
+      case 'get_paragraph_count':    return String(await w.GetParagraphCount());
+      case 'get_paragraph_text':     return await w.GetParagraphText(input.index);
+      case 'get_all_paragraphs':     return await w.GetAllParagraphs();
+      case 'select_paragraph':       await w.SelectParagraph(input.index); return 'selected paragraph ' + input.index;
+      case 'get_font_size':          return String(await w.GetFontSize());
+      case 'set_font_size':          await w.SetFontSize(input.size); return 'font size set to ' + input.size;
+      case 'set_bold':               await w.SetBold(input.bold); return 'bold set to ' + input.bold;
+      case 'set_italic':             await w.SetItalic(input.italic); return 'italic set to ' + input.italic;
+      case 'set_underline':          await w.SetUnderline(input.underline); return 'underline set to ' + input.underline;
+      case 'replace_selection':      await w.ReplaceSelection(input.text); return 'replaced selection';
+      case 'replace_paragraph':      await w.ReplaceParagraph(input.index, input.text); return 'replaced paragraph ' + input.index;
+      case 'insert_with_track_changes': await w.InsertWithTrackChanges(input.text); return 'inserted with track changes';
+      case 'insert_new_paragraph':   await w.InsertNewParagraph(input.text); return 'inserted new paragraph';
+      case 'insert_as_comment':      await w.InsertAsComment(input.text); return 'inserted comment';
+      case 'set_font_color':         await w.SetFontColor(input.color); return 'color set to ' + input.color;
+      default:                       return 'unknown tool: ' + name;
+    }
+  } catch(ex) {
+    return 'error: ' + ex;
+  }
+}
+
+// ─── Agent loop ───────────────────────────────────────────────────────────
+async function callAPI(messages) {
+  var params = {
+    model: MODEL,
+    max_tokens: parseInt(document.getElementById('p-maxtok').value) || 4096,
+    system: SYSTEM_PROMPT,
+    tools: WORD_TOOLS,
+    messages: messages
+  };
+  var temp = parseFloat(document.getElementById('p-temp').value);
+  if (temp !== 1) params.temperature = temp;
+  var topp = parseFloat(document.getElementById('p-topp').value);
+  if (topp !== 1) params.top_p = topp;
+  var topk = parseInt(document.getElementById('p-topk').value);
+  if (topk > 0) params.top_k = topk;
+
+  return new Promise(function(resolve, reject) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', BASE_URL + '/v1/messages');
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('x-api-key', API_KEY);
+    xhr.setRequestHeader('anthropic-version', '2023-06-01');
+    xhr.onload = function() {
+      try {
+        var d = JSON.parse(xhr.responseText);
+        if (d.error) reject(d.error.message || JSON.stringify(d.error));
+        else resolve(d);
+      } catch(ex) { reject(xhr.responseText.slice(0, 300)); }
+    };
+    xhr.onerror = function() { reject('网络错误'); };
+    xhr.send(JSON.stringify(params));
+  });
+}
+
+async function runAgent(userText) {
+  var btn = document.getElementById('send');
+  btn.disabled = true;
+
+  var think = document.createElement('div');
+  think.className = 'thinking';
+  think.textContent = '🤖 Agent 正在思考…';
+  document.getElementById('chat').appendChild(think);
+  document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+
+  // Build conversation from session history (exclude just-added user msg)
+  var hist = sessions[curSess].history;
+  var messages = [];
+  for (var i = 0; i < hist.length - 1; i++) {
+    var r = hist[i].role === 'user' ? 'user' : 'assistant';
+    messages.push({ role: r, content: hist[i].content });
+  }
+  messages.push({ role: 'user', content: userText });
+
+  var finalText = '';
+
+  try {
+    for (var iter = 0; iter < 15; iter++) {
+      think.textContent = '🤖 Agent 正在思考… (round ' + (iter + 1) + ')';
+
+      var resp = await callAPI(messages);
+
+      // Read real token counts from API response
+      if (resp.usage) {
+        tokSent += resp.usage.input_tokens || 0;
+        tokRecv += resp.usage.output_tokens || 0;
+        tokLocal += (resp.usage.input_tokens || 0) + (resp.usage.output_tokens || 0);
+        updateTokBar();
+      }
+
+      // Log to cloud tracker
+      cloudLog.push({ role: 'api', content: JSON.stringify(resp.content).slice(0, 200), time: new Date().toLocaleTimeString() });
+
+      var toolBlocks = [];
+      var textParts = [];
+      for (var ci = 0; ci < resp.content.length; ci++) {
+        var block = resp.content[ci];
+        if (block.type === 'tool_use') toolBlocks.push(block);
+        if (block.type === 'text' && block.text) textParts.push(block.text);
+      }
+
+      // Show any text the model produces mid-stream
+      if (textParts.length > 0) {
+        var partialText = textParts.join('\n');
+        if (resp.stop_reason === 'end_turn' || toolBlocks.length === 0) {
+          finalText = partialText;
+        }
+      }
+
+      // Done
+      if (resp.stop_reason === 'end_turn' || toolBlocks.length === 0) {
+        break;
+      }
+
+      // Execute tools
+      messages.push({ role: 'assistant', content: resp.content });
+      var toolResults = [];
+      for (var ti = 0; ti < toolBlocks.length; ti++) {
+        var tb = toolBlocks[ti];
+        think.textContent = '🔧 执行: ' + tb.name + '…';
+        var result = await executeTool(tb.name, tb.input || {});
+        showToolCall(tb.name, tb.input || {}, result);
+        toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: String(result) });
+      }
+      messages.push({ role: 'user', content: toolResults });
+    }
+  } catch(ex) {
+    finalText = '错误: ' + ex;
+  }
+
+  think.remove();
+  btn.disabled = false;
+
+  if (finalText) {
+    addMsg('ai', finalText);
+  }
+}
+
+// ─── Word bridge helpers ───────────────────────────────────────────────────
 async function readSel() {
   try {
     var text = await window.chrome.webview.hostObjects.word.GetSelectedText();
@@ -713,7 +1126,7 @@ async function insertToWord(text, trackChanges) {
   try {
     if (trackChanges) {
       await window.chrome.webview.hostObjects.word.InsertWithTrackChanges(text);
-      addMsg('ai', '✓ 已以 Track Changes 模式插入 Word，请在 Word 中接受或拒绝修订。');
+      addMsg('ai', '✓ 已以 Track Changes 模式插入 Word。');
     } else {
       await window.chrome.webview.hostObjects.word.ReplaceSelection(text);
       addMsg('ai', '✓ 已直接插入 Word。');
@@ -765,58 +1178,9 @@ function sendMsg() {
   autosize();
   addMsg('user', text);
 
-  // Log to cloud tracker
   cloudLog.push({ role: 'user', content: text, time: new Date().toLocaleTimeString() });
 
-  // Build messages from session history
-  var hist = sessions[curSess].history;
-  var msgs = [];
-  for (var i = 0; i < hist.length - 1; i++) { // exclude just-added user msg
-    var r = hist[i].role === 'user' ? 'user' : 'assistant';
-    msgs.push({ role: r, content: hist[i].content });
-  }
-  msgs.push({ role: 'user', content: text });
-
-  var btn = document.getElementById('send');
-  btn.disabled = true;
-
-  var think = document.createElement('div');
-  think.className = 'thinking';
-  think.textContent = '正在思考…';
-  document.getElementById('chat').appendChild(think);
-  document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
-
-  var params = {
-    model: MODEL,
-    max_tokens: parseInt(document.getElementById('p-maxtok').value) || 2048,
-    messages: msgs
-  };
-  var temp = parseFloat(document.getElementById('p-temp').value);
-  if (temp !== 1) params.temperature = temp;
-  var topp = parseFloat(document.getElementById('p-topp').value);
-  if (topp !== 1) params.top_p = topp;
-  var topk = parseInt(document.getElementById('p-topk').value);
-  if (topk > 0) params.top_k = topk;
-
-  var xhr = new XMLHttpRequest();
-  xhr.open('POST', BASE_URL + '/v1/messages');
-  xhr.setRequestHeader('Content-Type', 'application/json');
-  xhr.setRequestHeader('x-api-key', API_KEY);
-  xhr.setRequestHeader('anthropic-version', '2023-06-01');
-  xhr.onload = function() {
-    think.remove();
-    btn.disabled = false;
-    try {
-      var d = JSON.parse(xhr.responseText);
-      var reply = d.content && d.content[0] ? d.content[0].text : xhr.responseText;
-      addMsg('ai', reply);
-      cloudLog.push({ role: 'ai', content: reply.slice(0, 200) + (reply.length > 200 ? '…' : ''), time: new Date().toLocaleTimeString() });
-    } catch(ex) {
-      addMsg('ai', '解析失败: ' + xhr.responseText.slice(0, 300));
-    }
-  };
-  xhr.onerror = function() { think.remove(); btn.disabled = false; addMsg('ai', '网络错误。'); };
-  xhr.send(JSON.stringify(params));
+  runAgent(text);
 }
 
 // ─── Export Markdown ──────────────────────────────────────────────────────
@@ -852,7 +1216,8 @@ function showCloud() {
     var lines = [];
     for (var i = 0; i < cloudLog.length; i++) {
       var e = cloudLog[i];
-      lines.push('[' + e.time + '] ' + (e.role === 'user' ? '▶ 发出' : '◀ 收到') + '\n' + e.content + '\n');
+      var label = e.role === 'user' ? '▶ 发出' : (e.role === 'api' ? '◀ API响应' : '◀ 收到');
+      lines.push('[' + e.time + '] ' + label + '\n' + e.content + '\n');
     }
     body.textContent = lines.join('\n---\n');
   }
